@@ -1,0 +1,149 @@
+# Имя workflow (отображается в GitHub Actions)
+name: CI/CD Pipeline
+
+# Когда запускать workflow
+on:
+  push:
+    branches: [ main, master ]  # При пуше в main/master
+  pull_request:
+    branches: [ main, master ]  # При создании PR
+
+# Jobs - это задачи, которые будут выполнены
+jobs:
+  # Job 1: Сборка и тестирование
+  build-and-test:
+    # На каком окружении запускать
+    runs-on: ubuntu-latest
+    
+    # Шаги для выполнения
+    steps:
+      # Шаг 1: Клонирование репозитория
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      # Шаг 2: Установка Java
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          
+      # Шаг 3: Кэширование Maven зависимостей (для ускорения сборки)
+      - name: Cache Maven dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+          
+      # Шаг 4: Сборка проекта
+      - name: Build with Maven
+        run: mvn clean compile
+        
+      # Шаг 5: Запуск тестов
+      - name: Run tests
+        run: mvn test
+        
+      # Шаг 6: Упаковка приложения
+      - name: Package application
+        run: mvn package -DskipTests
+        
+      # Шаг 7: Сохранение JAR файла как артефакта
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: app-jar
+          path: target/*.jar
+          
+      # Шаг 8: Уведомление об успехе
+      - name: Success notification
+        if: success()
+        run: echo "✅ Build and tests completed successfully!"
+        
+      # Шаг 9: Уведомление об ошибке
+      - name: Failure notification
+        if: failure()
+        run: echo "❌ Build or tests failed!"
+
+  # Job 2: Сборка Docker образа
+  docker-build:
+    # Запускается только после успешного завершения build-and-test
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    # Запускается только при пуше в main/master (не при PR)
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    steps:
+      # Шаг 1: Клонирование репозитория
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      # Шаг 2: Скачивание JAR файла из предыдущей job
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: app-jar
+          path: target/
+          
+      # Шаг 3: Настройка Docker Buildx (для продвинутой сборки)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        
+      # Шаг 4: Вход в Docker Hub
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          
+      # Шаг 5: Сборка и отправка Docker образа
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          # Теги: latest и с хешем коммита
+          tags: ${{ secrets.DOCKER_USERNAME }}/todo-app:latest,${{ secrets.DOCKER_USERNAME }}/todo-app:${{ github.sha }}
+          # Кэширование для ускорения последующих сборок
+          cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/todo-app:buildcache
+          cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/todo-app:buildcache,mode=max
+
+  # Job 3: Деплой на сервер
+  deploy:
+    # Запускается только после успешного docker-build
+    needs: docker-build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    steps:
+      # Шаг: Деплой через SSH
+      - name: Deploy to VM
+        uses: appleboy/ssh-action@v0.1.6
+        with:
+          # Данные для подключения (хранятся в Secrets)
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          # Команды для выполнения на сервере
+          script: |
+            # Остановка и удаление старого контейнера (если есть)
+            docker stop todo-app || true
+            docker rm todo-app || true
+            
+            # Загрузка нового образа из Docker Hub
+            docker pull ${{ secrets.DOCKER_USERNAME }}/todo-app:latest
+            
+            # Запуск нового контейнера
+            docker run -d \
+              --name todo-app \
+              --restart unless-stopped \
+              -p 8080:8080 \
+              ${{ secrets.DOCKER_USERNAME }}/todo-app:latest
+            
+            # Очистка неиспользуемых образов (экономия места)
+            docker image prune -f
+            
+            # Проверка, что контейнер запустился
+            echo "✅ Deployment completed! Container status:"
+            docker ps | grep todo-app
