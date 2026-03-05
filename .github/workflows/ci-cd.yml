@@ -108,42 +108,4 @@ jobs:
           cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/todo-app:buildcache
           cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/todo-app:buildcache,mode=max
 
-  # Job 3: Деплой на сервер
-  deploy:
-    # Запускается только после успешного docker-build
-    needs: docker-build
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    
-    steps:
-      # Шаг: Деплой через SSH
-      - name: Deploy to VM
-        uses: appleboy/ssh-action@v0.1.6
-        with:
-          # Данные для подключения (хранятся в Secrets)
-          host: ${{ secrets.VM_HOST }}
-          username: ${{ secrets.VM_USER }}
-          key: ${{ secrets.VM_SSH_KEY }}
-          port: ${{ secrets.SSH_PORT }}
-          # Команды для выполнения на сервере
-          script: |
-            # Остановка и удаление старого контейнера (если есть)
-            docker stop todo-app || true
-            docker rm todo-app || true
-            
-            # Загрузка нового образа из Docker Hub
-            docker pull ${{ secrets.DOCKER_USERNAME }}/todo-app:latest
-            
-            # Запуск нового контейнера
-            docker run -d \
-              --name todo-app \
-              --restart unless-stopped \
-              -p 8080:8080 \
-              ${{ secrets.DOCKER_USERNAME }}/todo-app:latest
-            
-            # Очистка неиспользуемых образов (экономия места)
-            docker image prune -f
-            
-            # Проверка, что контейнер запустился
-            echo "✅ Deployment completed! Container status:"
-            docker ps | grep todo-app
+  
