@@ -1,0 +1,21 @@
+# Игнорируем папку target (чтобы не копировать лишнее)
+target/
+
+# Игнорируем логи
+*.log
+
+# Игнорируем Git файлы
+.git
+.gitignore
+
+# Игнорируем IDE файлы
+.idea/
+*.iml
+
+# Игнорируем README и документацию
+README.md
+
+# Игнорируем Maven wrapper
+.mvn/
+mvnw
+mvnw.cmd
