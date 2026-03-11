@@ -6,124 +6,108 @@ on:
   pull_request:
     branches: [ main, master ]
 
-env:
-  REGISTRY: cr.yandex
-  IMAGE_NAME: todo-app
-  # ВАЖНО: замените на ваш реальный идентификатор реестра в Yandex Cloud
-  REGISTRY_ID: ваш-идентификатор-реестра
-
 jobs:
-  build-and-push:
+  build-and-test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write  # Для GitHub Packages (если используете)
     
     steps:
-      # 1. Клонирование репозитория (v4)
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # 2. Установка Yandex Cloud CLI
-      - name: Install Yandex Cloud CLI
-        run: |
-          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
-          echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
-          # Добавляем в PATH для текущей сессии
-          echo "$HOME/yandex-cloud/bin" >> $PATH
-
-      # 3. Подготовка ключа сервисного аккаунта и получение IAM-токена
-      - name: Get IAM token for Service Account
-        id: iam-token
-        run: |
-          # Создаем временный файл с ключом сервисного аккаунта из секрета
-          echo '${{ secrets.YC_SA_JSON_KEY }}' > sa_key.json
-          
-          # Получаем IAM-токен (действует 12 часов)
-          export IAM_TOKEN=$(yc iam create-token --service-account-key sa_key.json)
-          
-          # Сохраняем токен как переменную окружения для следующих шагов
-          echo "IAM_TOKEN=${IAM_TOKEN}" >> $GITHUB_ENV
-          
-          # Удаляем файл с ключом
-          rm sa_key.json
-
-      # 4. Аутентификация в Yandex Container Registry через docker login
-      - name: Login to Yandex Container Registry
-        run: |
-          echo "${{ env.IAM_TOKEN }}" | docker login \
-            --username iam \
-            --password-stdin \
-            ${{ env.REGISTRY }}
-
-      # 5. Настройка Docker Buildx 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      # 6. Сборка и публикация образа (v6 - актуальная для build-push-action)
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+      - uses: actions/checkout@v3
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.REGISTRY_ID }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.REGISTRY_ID }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # 7. (Опционально) Загрузка артефактов сборки если нужно (v4)
-      - name: Upload build artifacts
-        if: always()
+          java-version: '17'
+          distribution: 'temurin'
+          
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+          
+      - name: Build with Maven
+        run: mvn clean compile
+        
+      - name: Run tests
+        run: mvn test
+        
+      - name: Package application
+        run: mvn package -DskipTests
+        
+      - name: Upload JAR artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs
-          path: /tmp/build.log
-          retention-days: 5
+          name: app-jar
+          path: target/*.jar
 
-  deploy:
-    needs: build-and-push
+  docker-build:
+    needs: build-and-test
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     
     steps:
-      # 1. Клонирование репозитория (v4)
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # 2. Установка Yandex Cloud CLI
-      - name: Install Yandex Cloud CLI
-        run: |
-          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
-          echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
-
-      # 3. Получение IAM-токена для деплоя
-      - name: Get IAM token for deployment
-        run: |
-          echo '${{ secrets.YC_SA_JSON_KEY }}' > sa_key.json
-          export IAM_TOKEN=$(yc iam create-token --service-account-key sa_key.json)
-          echo "IAM_TOKEN=${IAM_TOKEN}" >> $GITHUB_ENV
-          rm sa_key.json
-
-      # 4. Деплой в Yandex Cloud
-      - name: Deploy to Yandex Cloud
-        env:
-          REGISTRY_ID: ${{ env.REGISTRY_ID }}
-          IMAGE_NAME: ${{ env.IMAGE_NAME }}
-        run: |
-          echo "Deploying image ${{ env.REGISTRY }}/${{ env.REGISTRY_ID }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          
-          # Пример деплоя в Yandex Cloud Serverless Container
-          # yc serverless container revision deploy \
-          #   --container-name my-container \
-          #   --image ${{ env.REGISTRY }}/${{ env.REGISTRY_ID }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-          #   --service-account-id your-sa-id
-
-      # 5. (Опционально) Скачивание артефактов если нужно (v4)
-      - name: Download build artifacts
-        if: always()
+      - uses: actions/checkout@v3
+      
+      - name: Download JAR artifact
         uses: actions/download-artifact@v4
         with:
-          name: build-logs
-          path: ./downloaded-logs
+          name: app-jar
+          path: target/
+          
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        
+      # ИЗМЕНЕНО: Вход в Yandex Container Registry
+      - name: Login to Yandex Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: cr.yandex
+          username: json_key
+          password: ${{ secrets.YC_SA_KEY }}
+          
+      # ИЗМЕНЕНО: Сборка и отправка в Yandex Container Registry
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: |
+            cr.yandex/${{ secrets.YC_REGISTRY_ID }}/todo-app:latest
+            cr.yandex/${{ secrets.YC_REGISTRY_ID }}/todo-app:${{ github.sha }}
+          cache-from: type=registry,ref=cr.yandex/${{ secrets.YC_REGISTRY_ID }}/todo-app:buildcache
+          cache-to: type=registry,ref=cr.yandex/${{ secrets.YC_REGISTRY_ID }}/todo-app:buildcache,mode=max
+
+  deploy:
+    needs: docker-build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    steps:
+      - name: Deploy to Yandex Cloud VM
+        uses: appleboy/ssh-action@v0.1.6
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          port: 22
+          script: |
+            # ИЗМЕНЕНО: Вход в Yandex Container Registry на ВМ
+            echo "${{ secrets.YC_SA_KEY }}" | docker login --username json_key --password-stdin cr.yandex
+            
+            # Остановка и удаление старого контейнера
+            docker stop todo-app || true
+            docker rm todo-app || true
+            
+            # Загрузка нового образа
+            docker pull cr.yandex/${{ secrets.YC_REGISTRY_ID }}/todo-app:latest
+            
+            # Запуск нового контейнера
+            docker run -d \
+              --name todo-app \
+              --restart unless-stopped \
+              -p 8080:8080 \
+              cr.yandex/${{ secrets.YC_REGISTRY_ID }}/todo-app:latest
+            
+            # Очистка неиспользуемых образов
+            docker image prune -f
