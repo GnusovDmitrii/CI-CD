@@ -84,25 +84,27 @@ jobs:
           docker push cr.yandex/${{ secrets.YC_REGISTRY_ID }}/todo-app:${{ github.sha }}
           docker push cr.yandex/${{ secrets.YC_REGISTRY_ID }}/todo-app:latest
 
-  deploy:
-    needs: docker-build
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    
-    steps:
-      - name: Deploy to Yandex Cloud VM
-        uses: appleboy/ssh-action@v0.1.6
-        with:
-          host: ${{ secrets.VM_HOST }}
-          username: ${{ secrets.VM_USER }}
-          key: ${{ secrets.VM_SSH_KEY }}
-          port: 22
-          script: |
-            # 🔥 ПРОСТОЕ РЕШЕНИЕ: Логин на ВМ через OAuth-токен
-            echo "${{ secrets.YC_OAUTH_TOKEN }}" | docker login \
-              --username oauth \
-              --password-stdin \
-              cr.yandex
+deploy:
+  needs: docker-build
+  runs-on: ubuntu-latest
+  if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+  
+  steps:
+    - name: Deploy to Yandex Cloud VM
+      uses: appleboy/ssh-action@v0.1.6
+      with:
+        host: ${{ secrets.VM_HOST }}
+        username: ${{ secrets.VM_USER }}
+        key: ${{ secrets.VM_SSH_KEY }}
+        port: 22
+        script: |
+          # Простой тест подключения
+          echo "✅ SSH подключение успешно!"
+          echo "Текущий пользователь: $(whoami)"
+          echo "Дата на сервере: $(date)"
+          
+          # Проверка Docker
+          docker --version
             
             # Остановка старого контейнера
             docker stop todo-app || true
