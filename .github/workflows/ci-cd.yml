@@ -108,7 +108,17 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     
     steps:
-      # Шаг 1: Деплой на виртуальную машину через SSH
+      # Шаг 1: Проверка SSH подключения перед деплоем
+      - name: Test SSH connection
+        run: |
+          echo "🔍 Тестируем SSH подключение..."
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/id_rsa ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "echo '✅ SSH подключение работает'"
+      
+      # Шаг 2: Деплой на виртуальную машину через SSH
       - name: Deploy to Yandex Cloud VM
         uses: appleboy/ssh-action@v0.1.6
         with:
@@ -116,6 +126,7 @@ jobs:
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
           port: 22
+          fingerprint: ${{ secrets.SSH_FINGERPRINT }}
           debug: true
           script: |
             # Цветной вывод для наглядности
