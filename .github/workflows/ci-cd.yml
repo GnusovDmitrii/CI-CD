@@ -109,7 +109,7 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     
     steps:
-      # Шаг 1: Деплой на виртуальную машину через SSH (без проверки fingerprint)
+      # Шаг 1: Деплой на виртуальную машину через SSH
       - name: Deploy to Yandex Cloud VM
         uses: appleboy/ssh-action@v0.1.6
         with:
@@ -118,7 +118,6 @@ jobs:
           key: ${{ secrets.VM_SSH_KEY }}
           port: 22
           debug: true
-          # Убираем fingerprint для теста
           script: |
             # Цветной вывод для наглядности
             GREEN='\033[0;32m'
@@ -130,19 +129,41 @@ jobs:
             echo -e "${GREEN}🚀 Начинаем деплой на сервер${NC}"
             echo -e "${GREEN}========================================${NC}"
             
-            # Шаг 1: Проверка наличия Docker
+            # Шаг 1: Проверка и настройка Docker
             echo -e "${YELLOW}🔍 Проверяем Docker...${NC}"
             if ! command -v docker &> /dev/null; then
                 echo -e "${RED}❌ Docker не установлен! Устанавливаем...${NC}"
                 curl -fsSL https://get.docker.com -o get-docker.sh
                 sudo sh get-docker.sh
-                sudo usermod -aG docker $USER
                 echo -e "${GREEN}✅ Docker установлен${NC}"
             else
                 echo -e "${GREEN}✅ Docker уже установлен: $(docker --version)${NC}"
             fi
             
-            # Шаг 2: Логин в Yandex Container Registry
+            # Шаг 2: Добавление пользователя в группу docker
+            echo -e "${YELLOW}🔧 Настраиваем права Docker...${NC}"
+            if ! groups $USER | grep -q docker; then
+                echo -e "${YELLOW}Добавляем пользователя в группу docker...${NC}"
+                sudo usermod -aG docker $USER
+                echo -e "${GREEN}✅ Пользователь добавлен в группу docker${NC}"
+                echo -e "${YELLOW}⚠️ Перезапускаем сессию для применения прав...${NC}"
+                newgrp docker << EOF
+                # Продолжаем выполнение в новой группе
+            else
+                echo -e "${GREEN}✅ Пользователь уже в группе docker${NC}"
+            fi
+            
+            # Шаг 3: Проверка прав Docker
+            echo -e "${YELLOW}🔍 Проверяем права Docker...${NC}"
+            if docker ps &>/dev/null; then
+                echo -e "${GREEN}✅ Права Docker настроены правильно${NC}"
+            else
+                echo -e "${RED}❌ Проблема с правами Docker. Используем sudo...${NC}"
+                # Используем sudo для всех Docker команд
+                DOCKER_CMD="sudo docker"
+            fi
+            
+            # Шаг 4: Логин в Yandex Container Registry
             echo -e "${YELLOW}🔑 Логинимся в Yandex Container Registry...${NC}"
             echo "${{ secrets.YC_OAUTH_TOKEN }}" | docker login \
               --username oauth \
@@ -150,18 +171,18 @@ jobs:
               cr.yandex
             echo -e "${GREEN}✅ Успешно залогинились${NC}"
             
-            # Шаг 3: Остановка и удаление старого контейнера
+            # Шаг 5: Остановка и удаление старого контейнера
             echo -e "${YELLOW}🛑 Останавливаем старый контейнер...${NC}"
-            docker stop todo-app || true
-            docker rm todo-app || true
+            docker stop todo-app 2>/dev/null || true
+            docker rm todo-app 2>/dev/null || true
             echo -e "${GREEN}✅ Старый контейнер остановлен${NC}"
             
-            # Шаг 4: Загрузка нового образа
+            # Шаг 6: Загрузка нового образа
             echo -e "${YELLOW}📦 Загружаем новый образ...${NC}"
             docker pull cr.yandex/${{ secrets.YC_REGISTRY_ID }}/todo-app:latest
             echo -e "${GREEN}✅ Образ загружен${NC}"
             
-            # Шаг 5: Запуск нового контейнера
+            # Шаг 7: Запуск нового контейнера
             echo -e "${YELLOW}▶️ Запускаем новый контейнер...${NC}"
             docker run -d \
               --name todo-app \
@@ -172,19 +193,19 @@ jobs:
               cr.yandex/${{ secrets.YC_REGISTRY_ID }}/todo-app:latest
             echo -e "${GREEN}✅ Контейнер запущен${NC}"
             
-            # Шаг 6: Проверка статуса контейнера
+            # Шаг 8: Проверка статуса контейнера
             echo -e "${YELLOW}🔍 Проверяем статус контейнера...${NC}"
             sleep 5
-            if [ "$(docker ps -q -f name=todo-app)" ]; then
+            if docker ps | grep -q todo-app; then
                 echo -e "${GREEN}✅ Контейнер успешно запущен!${NC}"
                 docker ps | grep todo-app
                 
-                # Шаг 7: Проверка здоровья приложения
+                # Шаг 9: Проверка здоровья приложения
                 echo -e "${YELLOW}🏥 Проверяем здоровье приложения...${NC}"
                 sleep 10
                 if curl -f http://localhost:8080/actuator/health &>/dev/null; then
                     echo -e "${GREEN}✅ Приложение здорово!${NC}"
-                    echo -e "${GREEN}📊 Статус: $(curl -s http://localhost:8080/actuator/health | jq .status 2>/dev/null || echo 'unknown')${NC}"
+                    echo -e "${GREEN}📊 Статус: $(curl -s http://localhost:8080/actuator/health 2>/dev/null | grep -o '"status":"[^"]*"' | cut -d'"' -f4 || echo 'unknown')${NC}"
                 else
                     echo -e "${RED}⚠️ Приложение не отвечает на health check${NC}"
                     echo -e "${YELLOW}Последние логи контейнера:${NC}"
@@ -193,16 +214,16 @@ jobs:
             else
                 echo -e "${RED}❌ Контейнер не запустился!${NC}"
                 echo -e "${YELLOW}Логи контейнера:${NC}"
-                docker logs todo-app
+                docker logs todo-app 2>/dev/null || echo "Логи недоступны"
                 exit 1
             fi
             
-            # Шаг 8: Очистка старых образов
+            # Шаг 10: Очистка старых образов
             echo -e "${YELLOW}🧹 Очищаем старые образы...${NC}"
             docker image prune -f
             echo -e "${GREEN}✅ Очистка завершена${NC}"
             
-            # Шаг 9: Итоговая информация
+            # Шаг 11: Итоговая информация
             echo -e "${GREEN}========================================${NC}"
             echo -e "${GREEN}🎉 Деплой завершен успешно!${NC}"
             echo -e "${GREEN}========================================${NC}"
