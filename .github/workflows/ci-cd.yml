@@ -108,13 +108,20 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     
     steps:
-      # Шаг 1: Проверка SSH подключения перед деплоем
-      - name: Test SSH connection
+      # Шаг 1: Проверка SSH подключения и получение fingerprint
+      - name: Setup SSH and get fingerprint
         run: |
-          echo "🔍 Тестируем SSH подключение..."
+          echo "🔍 Настраиваем SSH и получаем fingerprint сервера..."
           mkdir -p ~/.ssh
           echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+          
+          # Получаем fingerprint сервера
+          FINGERPRINT=$(ssh-keyscan -t ed25519 ${{ secrets.VM_HOST }} 2>/dev/null | ssh-keygen -lf - | awk '{print $2}')
+          echo "Полученный fingerprint: $FINGERPRINT"
+          echo "SERVER_FINGERPRINT=$FINGERPRINT" >> $GITHUB_ENV
+          
+          # Тестируем подключение
           ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
           ssh -i ~/.ssh/id_rsa ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "echo '✅ SSH подключение работает'"
       
@@ -126,7 +133,7 @@ jobs:
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
           port: 22
-          fingerprint: SHA256:Lrup7Eb2f8/rqQjFg5uxt2MWFK2JjAvjFOp2K5HxwOM
+          fingerprint: ${{ env.SERVER_FINGERPRINT }}
           debug: true
           script: |
             # Цветной вывод для наглядности
