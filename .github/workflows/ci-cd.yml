@@ -76,7 +76,7 @@ jobs:
           name: app-jar
           path: target/
       
-      # Шаг 3: Логин в Yandex Container Registry через OAuth токен
+      # Шаг 3: Логин в Yandex Container Registry
       - name: Login to Yandex Container Registry
         run: |
           echo "🔑 Логинимся в Yandex Container Registry..."
@@ -105,27 +105,11 @@ jobs:
   deploy:
     needs: docker-build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     
     steps:
-      # Шаг 1: Проверка SSH подключения и получение fingerprint
-      - name: Setup SSH and get fingerprint
-        run: |
-          echo "🔍 Настраиваем SSH и получаем fingerprint сервера..."
-          mkdir -p ~/.ssh
-          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          
-          # Получаем fingerprint сервера
-          FINGERPRINT=$(ssh-keyscan -t ed25519 ${{ secrets.VM_HOST }} 2>/dev/null | ssh-keygen -lf - | awk '{print $2}')
-          echo "Полученный fingerprint: $FINGERPRINT"
-          echo "SERVER_FINGERPRINT=$FINGERPRINT" >> $GITHUB_ENV
-          
-          # Тестируем подключение
-          ssh-keyscan -H ${{ secrets.VM_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
-          ssh -i ~/.ssh/id_rsa ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "echo '✅ SSH подключение работает'"
-      
-      # Шаг 2: Деплой на виртуальную машину через SSH
+      # Шаг 1: Деплой на виртуальную машину через SSH (без проверки fingerprint)
       - name: Deploy to Yandex Cloud VM
         uses: appleboy/ssh-action@v0.1.6
         with:
@@ -133,8 +117,8 @@ jobs:
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
           port: 22
-          fingerprint: ${{ env.SERVER_FINGERPRINT }}
           debug: true
+          # Убираем fingerprint для теста
           script: |
             # Цветной вывод для наглядности
             GREEN='\033[0;32m'
