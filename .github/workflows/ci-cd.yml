@@ -146,26 +146,26 @@ jobs:
                 echo -e "${YELLOW}Добавляем пользователя в группу docker...${NC}"
                 sudo usermod -aG docker $USER
                 echo -e "${GREEN}✅ Пользователь добавлен в группу docker${NC}"
-                echo -e "${YELLOW}⚠️ Перезапускаем сессию для применения прав...${NC}"
-                newgrp docker << EOF
-                # Продолжаем выполнение в новой группе
+                echo -e "${YELLOW}⚠️ Для применения прав потребуется перелогин. Используем sudo для команд...${NC}"
+                # Временно используем sudo для Docker команд
+                DOCKER_CMD="sudo docker"
             else
                 echo -e "${GREEN}✅ Пользователь уже в группе docker${NC}"
+                DOCKER_CMD="docker"
             fi
             
             # Шаг 3: Проверка прав Docker
             echo -e "${YELLOW}🔍 Проверяем права Docker...${NC}"
-            if docker ps &>/dev/null; then
+            if $DOCKER_CMD ps &>/dev/null; then
                 echo -e "${GREEN}✅ Права Docker настроены правильно${NC}"
             else
-                echo -e "${RED}❌ Проблема с правами Docker. Используем sudo...${NC}"
-                # Используем sudo для всех Docker команд
+                echo -e "${RED}❌ Проблема с правами Docker. Используем sudo принудительно...${NC}"
                 DOCKER_CMD="sudo docker"
             fi
             
             # Шаг 4: Логин в Yandex Container Registry
             echo -e "${YELLOW}🔑 Логинимся в Yandex Container Registry...${NC}"
-            echo "${{ secrets.YC_OAUTH_TOKEN }}" | docker login \
+            echo "${{ secrets.YC_OAUTH_TOKEN }}" | $DOCKER_CMD login \
               --username oauth \
               --password-stdin \
               cr.yandex
@@ -173,18 +173,18 @@ jobs:
             
             # Шаг 5: Остановка и удаление старого контейнера
             echo -e "${YELLOW}🛑 Останавливаем старый контейнер...${NC}"
-            docker stop todo-app 2>/dev/null || true
-            docker rm todo-app 2>/dev/null || true
+            $DOCKER_CMD stop todo-app 2>/dev/null || true
+            $DOCKER_CMD rm todo-app 2>/dev/null || true
             echo -e "${GREEN}✅ Старый контейнер остановлен${NC}"
             
             # Шаг 6: Загрузка нового образа
             echo -e "${YELLOW}📦 Загружаем новый образ...${NC}"
-            docker pull cr.yandex/${{ secrets.YC_REGISTRY_ID }}/todo-app:latest
+            $DOCKER_CMD pull cr.yandex/${{ secrets.YC_REGISTRY_ID }}/todo-app:latest
             echo -e "${GREEN}✅ Образ загружен${NC}"
             
             # Шаг 7: Запуск нового контейнера
             echo -e "${YELLOW}▶️ Запускаем новый контейнер...${NC}"
-            docker run -d \
+            $DOCKER_CMD run -d \
               --name todo-app \
               --restart unless-stopped \
               -p 8080:8080 \
@@ -196,9 +196,9 @@ jobs:
             # Шаг 8: Проверка статуса контейнера
             echo -e "${YELLOW}🔍 Проверяем статус контейнера...${NC}"
             sleep 5
-            if docker ps | grep -q todo-app; then
+            if $DOCKER_CMD ps | grep -q todo-app; then
                 echo -e "${GREEN}✅ Контейнер успешно запущен!${NC}"
-                docker ps | grep todo-app
+                $DOCKER_CMD ps | grep todo-app
                 
                 # Шаг 9: Проверка здоровья приложения
                 echo -e "${YELLOW}🏥 Проверяем здоровье приложения...${NC}"
@@ -209,18 +209,18 @@ jobs:
                 else
                     echo -e "${RED}⚠️ Приложение не отвечает на health check${NC}"
                     echo -e "${YELLOW}Последние логи контейнера:${NC}"
-                    docker logs todo-app --tail 20
+                    $DOCKER_CMD logs todo-app --tail 20
                 fi
             else
                 echo -e "${RED}❌ Контейнер не запустился!${NC}"
                 echo -e "${YELLOW}Логи контейнера:${NC}"
-                docker logs todo-app 2>/dev/null || echo "Логи недоступны"
+                $DOCKER_CMD logs todo-app 2>/dev/null || echo "Логи недоступны"
                 exit 1
             fi
             
             # Шаг 10: Очистка старых образов
             echo -e "${YELLOW}🧹 Очищаем старые образы...${NC}"
-            docker image prune -f
+            $DOCKER_CMD image prune -f
             echo -e "${GREEN}✅ Очистка завершена${NC}"
             
             # Шаг 11: Итоговая информация
